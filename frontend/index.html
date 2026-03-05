@@ -516,16 +516,37 @@ const API_BASE = 'REPLACE_WITH_YOUR_CLOUD_RUN_URL'; // e.g. https://article-tts-
 let idToken = null;
 let currentObjectUrl = null;
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function decodeJwtPayload(token) {
+  let base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+  while (base64.length % 4) base64 += '=';
+  return JSON.parse(atob(base64));
+}
+
 // ── Google Sign-In ────────────────────────────────────────────────────────────
 function handleGoogleSignIn(response) {
   idToken = response.credential;
-  const payload = JSON.parse(atob(idToken.split('.')[1]));
+  const payload = decodeJwtPayload(idToken);
   document.getElementById('auth-status').textContent = payload.email;
   document.getElementById('login-screen').style.display = 'none';
   const appScreen = document.getElementById('app-screen');
   appScreen.classList.add('visible', 'fade-in');
-  // Refresh token before 55-minute expiry (tokens last 1 hour)
-  setTimeout(() => google.accounts.id.prompt(), 55 * 60 * 1000);
+  scheduleTokenRefresh();
+}
+
+function scheduleTokenRefresh() {
+  // Re-initialize Google Identity Services to get a fresh token via callback
+  setTimeout(() => {
+    google.accounts.id.initialize({
+      client_id: document.getElementById('g_id_onload').dataset.client_id,
+      callback: (resp) => {
+        idToken = resp.credential;
+        scheduleTokenRefresh();
+      },
+      auto_select: true,
+    });
+    google.accounts.id.prompt();
+  }, 55 * 60 * 1000);
 }
 
 // ── Settings toggle ─────────────────────────────────────────────────────────
@@ -571,7 +592,7 @@ function showPlayer(title, blobUrl) {
   audio.src = blobUrl;
   const dl = document.getElementById('download-link');
   dl.href = blobUrl;
-  dl.download = title.slice(0, 60) + '.mp3';
+  dl.download = title.replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 60) + '.mp3';
   document.getElementById('player-card').classList.add('visible', 'fade-in');
   audio.play();
 }

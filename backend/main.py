@@ -1,11 +1,17 @@
 import os
 import io
+import re
+import asyncio
+import socket
 import logging
+import ipaddress
+from urllib.parse import urlparse
+from functools import lru_cache
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, Field
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from google.cloud import texttospeech_v1beta1 as tts
@@ -35,6 +41,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Article-Title"],
 )
 
 # ---------------------------------------------------------------------------
@@ -70,15 +77,43 @@ class ExtractRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     url: HttpUrl
-    voice_name: str = "en-US-Chirp3-HD-Charon"   # good Chirp 3 HD default
-    speaking_rate: float = 1.0                     # 0.25 – 4.0
-    pitch: float = 0.0                             # -20.0 – 20.0 semitones
+    voice_name: str = "en-US-Chirp3-HD-Charon"
+    speaking_rate: float = Field(default=1.0, ge=0.25, le=4.0)
+    pitch: float = Field(default=0.0, ge=-20.0, le=20.0)
+
+# ---------------------------------------------------------------------------
+# SSRF protection — block requests to private/internal IPs
+# ---------------------------------------------------------------------------
+def _validate_url_safe(url: str) -> None:
+    """Reject URLs that resolve to private/internal IP addresses."""
+    parsed = urlparse(str(url))
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Invalid URL")
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Only HTTP(S) URLs are allowed")
+    try:
+        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="Could not resolve hostname")
+    for _, _, _, _, sockaddr in resolved:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise HTTPException(status_code=400, detail="URLs pointing to internal addresses are not allowed")
+
+# ---------------------------------------------------------------------------
+# TTS client singleton
+# ---------------------------------------------------------------------------
+@lru_cache(maxsize=1)
+def _get_tts_client() -> tts.TextToSpeechClient:
+    return tts.TextToSpeechClient()
 
 # ---------------------------------------------------------------------------
 # Article extraction helper
 # ---------------------------------------------------------------------------
 async def fetch_article_text(url: str) -> tuple[str, str]:
     """Returns (title, body_text)"""
+    _validate_url_safe(url)
     async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
         resp = await client.get(str(url), headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
@@ -116,7 +151,7 @@ async def extract(req: ExtractRequest, _=Depends(verify_google_token)):
         "title": title,
         "text": text,
         "word_count": word_count,
-        "estimated_minutes": round(word_count / 150),  # ~150 wpm
+        "estimated_minutes": max(1, round(word_count / 150)),  # ~150 wpm
     }
 
 
@@ -130,7 +165,7 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
     chunks = _chunk_text(text, MAX_BYTES)
     logger.info(f"Converting '{title}' — {len(chunks)} chunk(s)")
 
-    client = tts.TextToSpeechClient()
+    client = _get_tts_client()
     audio_parts = []
 
     for chunk in chunks:
@@ -144,7 +179,8 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
             speaking_rate=req.speaking_rate,
             pitch=req.pitch,
         )
-        response = client.synthesize_speech(
+        response = await asyncio.to_thread(
+            client.synthesize_speech,
             input=synthesis_input,
             voice=voice,
             audio_config=audio_config,
@@ -152,13 +188,16 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
         audio_parts.append(response.audio_content)
 
     combined = b"".join(audio_parts)
+    safe_title = _safe_filename(title)
+    # Sanitize header value: strip control characters to prevent header injection
+    header_title = re.sub(r'[\r\n\x00]', '', title)
 
     return StreamingResponse(
         io.BytesIO(combined),
         media_type="audio/mpeg",
         headers={
-            "Content-Disposition": f'attachment; filename="{_safe_filename(title)}.mp3"',
-            "X-Article-Title": title,
+            "Content-Disposition": f'attachment; filename="{safe_title}.mp3"',
+            "X-Article-Title": header_title,
             "Content-Length": str(len(combined)),
         },
     )
@@ -166,14 +205,29 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
 
 def _chunk_text(text: str, max_bytes: int) -> list[str]:
     """Split text into chunks that fit within Vertex TTS byte limit."""
-    sentences = text.replace("\n", " ").split(". ")
+    # Split on sentence-ending punctuation followed by whitespace
+    sentences = re.split(r'(?<=[.!?])\s+', text.replace("\n", " "))
     chunks, current = [], ""
     for sentence in sentences:
-        candidate = current + sentence + ". "
+        candidate = current + " " + sentence if current else sentence
         if len(candidate.encode("utf-8")) > max_bytes:
             if current:
                 chunks.append(current.strip())
-            current = sentence + ". "
+            # Handle single sentence exceeding limit — split on word boundaries
+            if len(sentence.encode("utf-8")) > max_bytes:
+                words = sentence.split()
+                part = ""
+                for word in words:
+                    test = part + " " + word if part else word
+                    if len(test.encode("utf-8")) > max_bytes:
+                        if part:
+                            chunks.append(part.strip())
+                        part = word
+                    else:
+                        part = test
+                current = part
+            else:
+                current = sentence
         else:
             current = candidate
     if current.strip():
