@@ -108,11 +108,39 @@
     line-height: 1.8;
   }
 
+  .login-personal {
+    color: #777;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    line-height: 1.7;
+    max-width: 280px;
+    text-transform: none;
+  }
+
   .login-divider {
     width: 40px;
     height: 1px;
     background: var(--border);
     margin: 4px auto;
+  }
+
+  .login-signin-wrap {
+    margin-top: 8px;
+    padding: 20px 32px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .login-signin-label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
   }
 
   /* ── App screen ── */
@@ -391,19 +419,24 @@
       <div class="login-title">Articles,<br>read aloud.</div>
     </div>
     <div class="login-divider"></div>
-    <div class="login-sub">Personal tool. Sign in with<br>your Google account to continue.</div>
-    <div id="g_id_onload"
-         data-client_id="REPLACE_WITH_YOUR_GOOGLE_CLIENT_ID"
-         data-callback="handleGoogleSignIn"
-         data-auto_select="true"
-         data-use_fedcm_for_prompt="true">
-    </div>
-    <div class="g_id_signin"
-         data-type="standard"
-         data-theme="filled_black"
-         data-text="sign_in_with"
-         data-shape="pill"
-         data-logo_alignment="left">
+    <div class="login-sub">A personal tool by its<br>sole user, for its sole user.</div>
+    <div class="login-personal">This is a private utility — not a public service. Access is restricted to a single authorized Google account.</div>
+    <div class="login-signin-wrap">
+      <div class="login-signin-label">Sign in to continue</div>
+      <div id="g_id_onload"
+           data-client_id="REPLACE_WITH_YOUR_GOOGLE_CLIENT_ID"
+           data-callback="handleGoogleSignIn"
+           data-auto_select="true"
+           data-use_fedcm_for_prompt="true">
+      </div>
+      <div class="g_id_signin"
+           data-type="standard"
+           data-theme="filled_black"
+           data-text="sign_in_with"
+           data-shape="pill"
+           data-size="large"
+           data-logo_alignment="left">
+      </div>
     </div>
   </div>
 
@@ -617,6 +650,11 @@ document.getElementById('cancel-btn').addEventListener('click', () => {
 document.getElementById('url-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('preview-btn').click();
 });
+
+// ── Service Worker ────────────────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
+}
 </script>
 </body>
 </html>
