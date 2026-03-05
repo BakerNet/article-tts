@@ -30,7 +30,7 @@ GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]       # OAuth Web Client ID
 ALLOWED_EMAIL    = os.environ["ALLOWED_EMAIL"]           # your Google account email
 GCP_PROJECT      = os.environ["GCP_PROJECT"]             # GCP project ID
 GCP_LOCATION     = os.environ.get("GCP_LOCATION", "us-central1")
-FRONTEND_ORIGIN  = os.environ.get("FRONTEND_ORIGIN", "*")  # Your PWA origin e.g. https://tts.yourdomain.com
+FRONTEND_ORIGIN  = os.environ["FRONTEND_ORIGIN"]            # Your PWA origin e.g. https://tts.yourdomain.com
 
 # ---------------------------------------------------------------------------
 # CORS
