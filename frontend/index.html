@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<title>Listener</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+
+<!-- Google Identity Services -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0d0d0d;
+    --surface:  #151515;
+    --border:   #2a2a2a;
+    --accent:   #c8f060;
+    --muted:    #555;
+    --text:     #e8e6df;
+    --serif:    'Instrument Serif', Georgia, serif;
+    --mono:     'DM Mono', monospace;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 14px;
+    overscroll-behavior: none;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* ── Header ── */
+  header {
+    padding: 28px 24px 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  .wordmark {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 28px;
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+
+  .wordmark span { color: var(--accent); }
+
+  #auth-status {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  /* ── Main ── */
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 32px 24px 24px;
+    gap: 20px;
+    max-width: 680px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  /* ── Login screen ── */
+  #login-screen {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    text-align: center;
+  }
+
+  .login-title {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 42px;
+    line-height: 1.1;
+    letter-spacing: -1px;
+  }
+
+  .login-sub {
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    line-height: 1.8;
+  }
+
+  .login-divider {
+    width: 40px;
+    height: 1px;
+    background: var(--border);
+    margin: 4px auto;
+  }
+
+  /* ── App screen ── */
+  #app-screen { display: none; flex-direction: column; gap: 20px; flex: 1; }
+  #app-screen.visible { display: flex; }
+
+  /* ── URL input area ── */
+  .input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .url-row {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  input[type="url"] {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 12px 14px;
+    outline: none;
+    transition: border-color 0.15s;
+    min-width: 0;
+  }
+
+  input[type="url"]:focus { border-color: var(--accent); }
+  input[type="url"]::placeholder { color: var(--muted); }
+
+  .btn {
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: #0d0d0d;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    padding: 12px 18px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s, transform 0.1s;
+    text-transform: uppercase;
+  }
+
+  .btn:hover { opacity: 0.88; }
+  .btn:active { transform: scale(0.97); }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+  .btn-ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    padding: 8px 14px;
+    border-radius: 5px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: border-color 0.15s;
+  }
+  .btn-ghost:hover { border-color: var(--text); }
+
+  /* ── Settings panel ── */
+  .settings-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    user-select: none;
+    width: fit-content;
+  }
+  .settings-toggle::before {
+    content: '›';
+    display: inline-block;
+    transition: transform 0.2s;
+    font-size: 14px;
+  }
+  .settings-toggle.open::before { transform: rotate(90deg); }
+
+  .settings-panel {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    gap: 16px;
+    flex-direction: column;
+  }
+  .settings-panel.visible { display: flex; }
+
+  .setting-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .setting-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .setting-val {
+    color: var(--accent);
+    font-size: 11px;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 2px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+  }
+
+  select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    outline: none;
+    width: 100%;
+  }
+
+  /* ── Article preview ── */
+  #preview-card {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    gap: 10px;
+    flex-direction: column;
+  }
+  #preview-card.visible { display: flex; }
+
+  .preview-title {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 20px;
+    line-height: 1.3;
+    letter-spacing: -0.3px;
+  }
+
+  .preview-meta {
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+  }
+
+  .preview-text {
+    color: #888;
+    font-size: 12px;
+    line-height: 1.7;
+    max-height: 120px;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+    mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+  }
+
+  .preview-actions {
+    display: flex;
+    gap: 10px;
+    padding-top: 4px;
+  }
+
+  /* ── Audio player ── */
+  #player-card {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 20px;
+    flex-direction: column;
+    gap: 16px;
+  }
+  #player-card.visible { display: flex; }
+
+  .player-title {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 18px;
+    line-height: 1.3;
+  }
+
+  audio {
+    width: 100%;
+    height: 40px;
+    outline: none;
+    border-radius: 4px;
+    filter: invert(1) hue-rotate(60deg) brightness(0.9);
+  }
+
+  .player-dl {
+    align-self: flex-start;
+  }
+
+  /* ── Status / error ── */
+  #status {
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    min-height: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #status.error { color: #ff6b6b; }
+
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+    flex-shrink: 0;
+  }
+  .spinner.active { display: block; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Fade-in ── */
+  .fade-in {
+    animation: fadeIn 0.3s ease forwards;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wordmark">listen<span>.</span></div>
+  <div id="auth-status">not signed in</div>
+</header>
+
+<main>
+
+  <!-- Login -->
+  <div id="login-screen">
+    <div>
+      <div class="login-title">Articles,<br>read aloud.</div>
+    </div>
+    <div class="login-divider"></div>
+    <div class="login-sub">Personal tool. Sign in with<br>your Google account to continue.</div>
+    <div id="g_id_onload"
+         data-client_id="REPLACE_WITH_YOUR_GOOGLE_CLIENT_ID"
+         data-callback="handleGoogleSignIn"
+         data-auto_select="true"
+         data-use_fedcm_for_prompt="true">
+    </div>
+    <div class="g_id_signin"
+         data-type="standard"
+         data-theme="filled_black"
+         data-text="sign_in_with"
+         data-shape="pill"
+         data-logo_alignment="left">
+    </div>
+  </div>
+
+  <!-- App -->
+  <div id="app-screen">
+
+    <div class="input-group">
+      <label>Article URL</label>
+      <div class="url-row">
+        <input type="url" id="url-input" placeholder="https://..." autocomplete="off" autocorrect="off" spellcheck="false">
+        <button class="btn" id="preview-btn">Preview</button>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div>
+      <div class="settings-toggle" id="settings-toggle">Voice settings</div>
+      <div class="settings-panel" id="settings-panel" style="margin-top:10px;">
+        <div class="setting-row">
+          <label>Voice</label>
+          <select id="voice-select">
+            <option value="en-US-Chirp3-HD-Charon">Charon (M) — deep, measured</option>
+            <option value="en-US-Chirp3-HD-Aoede">Aoede (F) — warm, narrative</option>
+            <option value="en-US-Chirp3-HD-Fenrir">Fenrir (M) — energetic</option>
+            <option value="en-US-Chirp3-HD-Kore">Kore (F) — clear, bright</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label>Speaking rate</label>
+            <span class="setting-val" id="rate-val">1.0×</span>
+          </div>
+          <input type="range" id="rate-slider" min="0.75" max="2.0" step="0.05" value="1.0">
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <label>Pitch</label>
+            <span class="setting-val" id="pitch-val">0 st</span>
+          </div>
+          <input type="range" id="pitch-slider" min="-5" max="5" step="0.5" value="0">
+        </div>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div id="status">
+      <div class="spinner" id="spinner"></div>
+      <span id="status-text"></span>
+    </div>
+
+    <!-- Preview card -->
+    <div id="preview-card">
+      <div class="preview-title" id="preview-title"></div>
+      <div class="preview-meta" id="preview-meta"></div>
+      <div class="preview-text" id="preview-text"></div>
+      <div class="preview-actions">
+        <button class="btn" id="convert-btn">Convert to audio</button>
+        <button class="btn-ghost" id="cancel-btn">Clear</button>
+      </div>
+    </div>
+
+    <!-- Player card -->
+    <div id="player-card">
+      <div class="player-title" id="player-title"></div>
+      <audio id="audio-player" controls></audio>
+      <a class="btn player-dl" id="download-link" download>Download MP3</a>
+    </div>
+
+  </div>
+</main>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+const API_BASE = 'REPLACE_WITH_YOUR_CLOUD_RUN_URL'; // e.g. https://article-tts-xxxx-uc.a.run.app
+
+// ── State ────────────────────────────────────────────────────────────────────
+let idToken = null;
+let currentObjectUrl = null;
+
+// ── Google Sign-In ────────────────────────────────────────────────────────────
+function handleGoogleSignIn(response) {
+  idToken = response.credential;
+  const payload = JSON.parse(atob(idToken.split('.')[1]));
+  document.getElementById('auth-status').textContent = payload.email;
+  document.getElementById('login-screen').style.display = 'none';
+  const appScreen = document.getElementById('app-screen');
+  appScreen.classList.add('visible', 'fade-in');
+  // Refresh token before 55-minute expiry (tokens last 1 hour)
+  setTimeout(() => google.accounts.id.prompt(), 55 * 60 * 1000);
+}
+
+// ── Settings toggle ─────────────────────────────────────────────────────────
+document.getElementById('settings-toggle').addEventListener('click', function() {
+  this.classList.toggle('open');
+  document.getElementById('settings-panel').classList.toggle('visible');
+});
+
+document.getElementById('rate-slider').addEventListener('input', function() {
+  document.getElementById('rate-val').textContent = parseFloat(this.value).toFixed(2) + '×';
+});
+document.getElementById('pitch-slider').addEventListener('input', function() {
+  document.getElementById('pitch-val').textContent = parseFloat(this.value).toFixed(1) + ' st';
+});
+
+// ── UI helpers ───────────────────────────────────────────────────────────────
+function setStatus(msg, isError = false) {
+  const el = document.getElementById('status-text');
+  const status = document.getElementById('status');
+  el.textContent = msg;
+  status.className = isError ? 'error' : '';
+}
+function setLoading(active) {
+  document.getElementById('spinner').className = 'spinner' + (active ? ' active' : '');
+  document.getElementById('preview-btn').disabled = active;
+  document.getElementById('convert-btn').disabled = active;
+}
+function showPreview(data) {
+  document.getElementById('preview-title').textContent = data.title;
+  document.getElementById('preview-meta').textContent =
+    `~${data.word_count.toLocaleString()} words · ~${data.estimated_minutes} min listen`;
+  document.getElementById('preview-text').textContent = data.text.slice(0, 600);
+  document.getElementById('preview-card').classList.add('visible', 'fade-in');
+}
+function hidePreview() {
+  document.getElementById('preview-card').classList.remove('visible', 'fade-in');
+}
+function showPlayer(title, blobUrl) {
+  document.getElementById('player-title').textContent = title;
+  const audio = document.getElementById('audio-player');
+  if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+  currentObjectUrl = blobUrl;
+  audio.src = blobUrl;
+  const dl = document.getElementById('download-link');
+  dl.href = blobUrl;
+  dl.download = title.slice(0, 60) + '.mp3';
+  document.getElementById('player-card').classList.add('visible', 'fade-in');
+  audio.play();
+}
+
+// ── API calls ────────────────────────────────────────────────────────────────
+async function apiPost(path, body) {
+  const res = await fetch(API_BASE + path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + idToken,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || 'Request failed');
+  }
+  return res;
+}
+
+// ── Preview ──────────────────────────────────────────────────────────────────
+document.getElementById('preview-btn').addEventListener('click', async () => {
+  const url = document.getElementById('url-input').value.trim();
+  if (!url) return;
+  hidePreview();
+  document.getElementById('player-card').classList.remove('visible');
+  setLoading(true);
+  setStatus('Extracting article…');
+  try {
+    const res = await apiPost('/extract', { url });
+    const data = await res.json();
+    showPreview(data);
+    setStatus('');
+  } catch (e) {
+    setStatus(e.message, true);
+  } finally {
+    setLoading(false);
+  }
+});
+
+// ── Convert ──────────────────────────────────────────────────────────────────
+document.getElementById('convert-btn').addEventListener('click', async () => {
+  const url = document.getElementById('url-input').value.trim();
+  const voice = document.getElementById('voice-select').value;
+  const rate  = parseFloat(document.getElementById('rate-slider').value);
+  const pitch = parseFloat(document.getElementById('pitch-slider').value);
+
+  setLoading(true);
+  setStatus('Converting to audio — this may take a moment…');
+  document.getElementById('player-card').classList.remove('visible');
+
+  try {
+    const res = await apiPost('/tts', { url, voice_name: voice, speaking_rate: rate, pitch });
+    const title = decodeURIComponent(res.headers.get('X-Article-Title') || 'Article');
+    const blob  = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    showPlayer(title, blobUrl);
+    hidePreview();
+    setStatus('');
+  } catch (e) {
+    setStatus(e.message, true);
+  } finally {
+    setLoading(false);
+  }
+});
+
+// ── Cancel ───────────────────────────────────────────────────────────────────
+document.getElementById('cancel-btn').addEventListener('click', () => {
+  hidePreview();
+  setStatus('');
+  document.getElementById('url-input').value = '';
+});
+
+// ── Enter key ─────────────────────────────────────────────────────────────────
+document.getElementById('url-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('preview-btn').click();
+});
+</script>
+</body>
+</html>
