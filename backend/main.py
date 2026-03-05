@@ -232,7 +232,10 @@ def _chunk_text(text: str, max_bytes: int) -> list[str]:
             current = candidate
     if current.strip():
         chunks.append(current.strip())
-    return chunks or [text[:max_bytes]]
+    if not chunks:
+        encoded = text.encode("utf-8")[:max_bytes]
+        return [encoded.decode("utf-8", errors="ignore").strip()]
+    return chunks
 
 
 def _safe_filename(title: str) -> str:

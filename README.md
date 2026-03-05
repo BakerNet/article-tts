@@ -89,16 +89,6 @@ REPLACE_WITH_YOUR_GOOGLE_CLIENT_ID  →  your OAuth client ID
 REPLACE_WITH_YOUR_CLOUD_RUN_URL     →  your Cloud Run URL
 ```
 
-Also add the service worker registration snippet just before `</body>`:
-
-```html
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js');
-}
-</script>
-```
-
 ### Deploy to Firebase Hosting (simplest GCP-native option)
 
 ```bash

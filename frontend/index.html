@@ -647,7 +647,7 @@ document.getElementById('convert-btn').addEventListener('click', async () => {
 
   try {
     const res = await apiPost('/tts', { url, voice_name: voice, speaking_rate: rate, pitch });
-    const title = decodeURIComponent(res.headers.get('X-Article-Title') || 'Article');
+    const title = res.headers.get('X-Article-Title') || 'Article';
     const blob  = await res.blob();
     const blobUrl = URL.createObjectURL(blob);
     showPlayer(title, blobUrl);
