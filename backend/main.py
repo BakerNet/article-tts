@@ -202,6 +202,7 @@ async def fetch_article_text(url: str) -> tuple[str, str]:
         include_comments=False,
         include_tables=False,
         output_format="txt",
+        favor_recall=True,
     )
     metadata = trafilatura.extract_metadata(html)
     title = metadata.title if metadata and metadata.title else "Article"
@@ -255,34 +256,44 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
     )
 
     async def audio_stream():
-        for i, chunk in enumerate(chunks):
-            try:
-                response = await asyncio.to_thread(
-                    client.synthesize_speech,
-                    input=tts.SynthesisInput(text=chunk),
-                    voice=voice,
-                    audio_config=audio_config,
-                )
-                yield response.audio_content
-            except InvalidArgument as e:
-                error_msg = str(e)
-                if "sentences that are too long" in error_msg:
-                    logger.warning(f"Chunk {i} had sentences too long, re-splitting: {error_msg}")
-                    sub_chunks = _chunk_text(chunk, MAX_BYTES // 2)
-                    for sub_chunk in sub_chunks:
-                        try:
-                            response = await asyncio.to_thread(
-                                client.synthesize_speech,
-                                input=tts.SynthesisInput(text=sub_chunk),
-                                voice=voice,
-                                audio_config=audio_config,
-                            )
-                            yield response.audio_content
-                        except InvalidArgument:
-                            logger.error(f"Chunk still too long after re-split, skipping: {sub_chunk[:80]}...")
-                            continue
-                else:
-                    raise
+        try:
+            for i, chunk in enumerate(chunks):
+                logger.info(f"TTS chunk {i+1}/{len(chunks)}: {len(chunk.encode('utf-8'))} bytes")
+                try:
+                    response = await asyncio.to_thread(
+                        client.synthesize_speech,
+                        input=tts.SynthesisInput(text=chunk),
+                        voice=voice,
+                        audio_config=audio_config,
+                    )
+                    logger.info(f"TTS chunk {i+1}/{len(chunks)} done: {len(response.audio_content)} audio bytes")
+                    yield response.audio_content
+                except InvalidArgument as e:
+                    error_msg = str(e)
+                    if "sentences that are too long" in error_msg:
+                        logger.warning(f"Chunk {i} had sentences too long, re-splitting: {error_msg}")
+                        sub_chunks = _chunk_text(chunk, MAX_BYTES // 2)
+                        for sub_chunk in sub_chunks:
+                            try:
+                                response = await asyncio.to_thread(
+                                    client.synthesize_speech,
+                                    input=tts.SynthesisInput(text=sub_chunk),
+                                    voice=voice,
+                                    audio_config=audio_config,
+                                )
+                                yield response.audio_content
+                            except InvalidArgument:
+                                logger.error(f"Chunk still too long after re-split, skipping: {sub_chunk[:80]}...")
+                                continue
+                    else:
+                        raise
+            logger.info(f"TTS stream complete: all {len(chunks)} chunks sent")
+        except asyncio.CancelledError:
+            logger.warning(f"TTS stream cancelled (client disconnect?) after starting chunk processing")
+            raise
+        except Exception as e:
+            logger.error(f"TTS stream error: {type(e).__name__}: {e}")
+            raise
 
     safe_title = _safe_filename(title)
     # Sanitize header value: strip control characters to prevent header injection

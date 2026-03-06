@@ -526,3 +526,36 @@ class TestChunkTextEdgeCases:
         assert len(chunks) >= 1
         for chunk in chunks:
             assert len(chunk.encode("utf-8")) <= 10 or len(chunk.split()) == 1
+
+
+# ---------------------------------------------------------------------------
+# fetch_article_text: favor_recall extracts all articles
+# ---------------------------------------------------------------------------
+class TestFavorRecallExtraction:
+    @pytest.mark.anyio
+    async def test_multi_article_extracts_all_sections(self):
+        """Extraction with multiple <article> elements should return content from all of them."""
+        sections = [
+            f"<article><p>Section {i} has unique content about topic-{i} that is long enough to matter. " * 3 + "</p></article>"
+            for i in range(1, 8)
+        ]
+        html = f"<html><body>{''.join(sections)}</body></html>"
+
+        mock_resp = MagicMock()
+        mock_resp.text = html
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("main._validate_url_safe"), \
+             patch("main.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_resp
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            title, text = await fetch_article_text("http://example.com/multi-article")
+
+        # Content from early AND late sections should be present
+        assert "topic-1" in text
+        assert "topic-5" in text
+        assert "topic-7" in text

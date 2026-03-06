@@ -623,6 +623,7 @@ function showPlayer(title, blobUrl) {
   const dl = document.getElementById('download-link');
   dl.href = blobUrl;
   dl.download = title.replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 60) + '.mp3';
+  dl.style.display = '';
   document.getElementById('player-card').classList.add('visible', 'fade-in');
   audio.play();
 }
@@ -630,6 +631,9 @@ function showPlayer(title, blobUrl) {
 async function streamAudio(response, title) {
   const audio = document.getElementById('audio-player');
   if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+
+  // Hide download until full MP3 is ready
+  document.getElementById('download-link').style.display = 'none';
 
   // Collect chunks for download link
   const receivedChunks = [];
@@ -677,6 +681,7 @@ async function streamAudio(response, title) {
           const dl = document.getElementById('download-link');
           dl.href = dlUrl;
           dl.download = title.replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 60) + '.mp3';
+          dl.style.display = '';
         }
 
         try {
