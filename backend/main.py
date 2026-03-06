@@ -16,6 +16,7 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from google.api_core.exceptions import InvalidArgument
 from google.cloud import texttospeech_v1beta1 as tts
+from lxml import etree
 import trafilatura
 import httpx
 from lxml import html as lxml_html
@@ -150,6 +151,36 @@ def _merge_article_elements(html: str) -> str:
     merged_inner = "".join(lxml_tostring(a, encoding="unicode") for a in best)
     return f"<html><body><article>{merged_inner}</article></body></html>"
 
+
+def _replace_code_blocks(html: str) -> str:
+    """Replace <pre> and standalone <code> blocks with a notice for TTS."""
+    try:
+        tree = lxml_html.fromstring(html)
+    except Exception:
+        return html
+
+    replacement = "A code block was excluded from this reading."
+
+    # Replace <pre> elements (which usually wrap <code> blocks)
+    for el in tree.xpath("//pre"):
+        placeholder = etree.Element("p")
+        placeholder.text = replacement
+        el.getparent().replace(el, placeholder)
+
+    # Replace remaining standalone <code> blocks that aren't inline.
+    # Inline <code> (inside a <p>, <span>, <li>, etc.) is kept as-is since
+    # it's typically just a word or short phrase.
+    for el in tree.xpath("//code"):
+        parent = el.getparent()
+        if parent is not None and parent.tag in ("p", "span", "li", "td", "th", "a", "em", "strong", "h1", "h2", "h3", "h4", "h5", "h6"):
+            continue
+        placeholder = etree.Element("p")
+        placeholder.text = replacement
+        parent.replace(el, placeholder)
+
+    return lxml_tostring(tree, encoding="unicode")
+
+
 # ---------------------------------------------------------------------------
 # Article extraction helper
 # ---------------------------------------------------------------------------
@@ -164,13 +195,13 @@ async def fetch_article_text(url: str) -> tuple[str, str]:
     # Some sites (e.g. Discord blog) split content across multiple <article>
     # elements. Trafilatura only extracts the first one, so merge them.
     html = _merge_article_elements(html)
+    html = _replace_code_blocks(html)
 
     result = trafilatura.extract(
         html,
         include_comments=False,
         include_tables=False,
         output_format="txt",
-        prune_xpath=["//pre", "//code"],
     )
     metadata = trafilatura.extract_metadata(html)
     title = metadata.title if metadata and metadata.title else "Article"
