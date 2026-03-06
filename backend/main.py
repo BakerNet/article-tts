@@ -234,7 +234,7 @@ async def extract(req: ExtractRequest, _=Depends(verify_google_token)):
 
 @app.post("/tts")
 async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
-    """Extract article and stream back MP3 audio."""
+    """Extract article and stream back MP3 audio as chunks are synthesized."""
     title, text = await fetch_article_text(str(req.url))
 
     # Vertex AI TTS has a 5000 byte limit per request — chunk if needed
@@ -243,7 +243,6 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
     logger.info(f"Converting '{title}' — {len(chunks)} chunk(s)")
 
     client = _get_tts_client()
-    audio_parts = []
 
     voice = tts.VoiceSelectionParams(
         language_code="en-US",
@@ -255,48 +254,46 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
         pitch=req.pitch,
     )
 
-    for i, chunk in enumerate(chunks):
-        try:
-            response = await asyncio.to_thread(
-                client.synthesize_speech,
-                input=tts.SynthesisInput(text=chunk),
-                voice=voice,
-                audio_config=audio_config,
-            )
-            audio_parts.append(response.audio_content)
-        except InvalidArgument as e:
-            error_msg = str(e)
-            if "sentences that are too long" in error_msg:
-                # Re-chunk more aggressively and retry
-                logger.warning(f"Chunk {i} had sentences too long, re-splitting: {error_msg}")
-                sub_chunks = _chunk_text(chunk, MAX_BYTES // 2)
-                for sub_chunk in sub_chunks:
-                    try:
-                        response = await asyncio.to_thread(
-                            client.synthesize_speech,
-                            input=tts.SynthesisInput(text=sub_chunk),
-                            voice=voice,
-                            audio_config=audio_config,
-                        )
-                        audio_parts.append(response.audio_content)
-                    except InvalidArgument:
-                        logger.error(f"Chunk still too long after re-split, skipping: {sub_chunk[:80]}...")
-                        continue
-            else:
-                raise
+    async def audio_stream():
+        for i, chunk in enumerate(chunks):
+            try:
+                response = await asyncio.to_thread(
+                    client.synthesize_speech,
+                    input=tts.SynthesisInput(text=chunk),
+                    voice=voice,
+                    audio_config=audio_config,
+                )
+                yield response.audio_content
+            except InvalidArgument as e:
+                error_msg = str(e)
+                if "sentences that are too long" in error_msg:
+                    logger.warning(f"Chunk {i} had sentences too long, re-splitting: {error_msg}")
+                    sub_chunks = _chunk_text(chunk, MAX_BYTES // 2)
+                    for sub_chunk in sub_chunks:
+                        try:
+                            response = await asyncio.to_thread(
+                                client.synthesize_speech,
+                                input=tts.SynthesisInput(text=sub_chunk),
+                                voice=voice,
+                                audio_config=audio_config,
+                            )
+                            yield response.audio_content
+                        except InvalidArgument:
+                            logger.error(f"Chunk still too long after re-split, skipping: {sub_chunk[:80]}...")
+                            continue
+                else:
+                    raise
 
-    combined = b"".join(audio_parts)
     safe_title = _safe_filename(title)
     # Sanitize header value: strip control characters to prevent header injection
     header_title = re.sub(r'[\r\n\x00]', '', title)
 
     return StreamingResponse(
-        io.BytesIO(combined),
+        audio_stream(),
         media_type="audio/mpeg",
         headers={
             "Content-Disposition": f'attachment; filename="{safe_title}.mp3"',
             "X-Article-Title": header_title,
-            "Content-Length": str(len(combined)),
         },
     )
 
