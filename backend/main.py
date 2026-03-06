@@ -170,6 +170,7 @@ async def fetch_article_text(url: str) -> tuple[str, str]:
         include_comments=False,
         include_tables=False,
         output_format="txt",
+        prune_xpath=["//pre", "//code"],
     )
     metadata = trafilatura.extract_metadata(html)
     title = metadata.title if metadata and metadata.title else "Article"
