@@ -14,7 +14,6 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, HttpUrl, Field
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
-from google.api_core.exceptions import InvalidArgument
 from google.cloud import texttospeech_v1beta1 as tts
 from lxml import etree
 import trafilatura
@@ -245,46 +244,24 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
     client = _get_tts_client()
     audio_parts = []
 
-    voice = tts.VoiceSelectionParams(
-        language_code="en-US",
-        name=req.voice_name,
-    )
-    audio_config = tts.AudioConfig(
-        audio_encoding=tts.AudioEncoding.MP3,
-        speaking_rate=req.speaking_rate,
-        pitch=req.pitch,
-    )
-
-    for i, chunk in enumerate(chunks):
-        try:
-            response = await asyncio.to_thread(
-                client.synthesize_speech,
-                input=tts.SynthesisInput(text=chunk),
-                voice=voice,
-                audio_config=audio_config,
-            )
-            audio_parts.append(response.audio_content)
-        except InvalidArgument as e:
-            error_msg = str(e)
-            if "sentences that are too long" in error_msg:
-                # Re-split this chunk more aggressively and retry
-                logger.warning(f"Chunk {i} had sentences too long, re-splitting: {error_msg}")
-                sub_text = _split_long_sentences(chunk, max_sentence_chars=200)
-                sub_chunks = _chunk_text(sub_text, MAX_BYTES)
-                for sub_chunk in sub_chunks:
-                    try:
-                        response = await asyncio.to_thread(
-                            client.synthesize_speech,
-                            input=tts.SynthesisInput(text=sub_chunk),
-                            voice=voice,
-                            audio_config=audio_config,
-                        )
-                        audio_parts.append(response.audio_content)
-                    except InvalidArgument:
-                        logger.error(f"Chunk still too long after re-split, skipping: {sub_chunk[:80]}...")
-                        continue
-            else:
-                raise
+    for chunk in chunks:
+        synthesis_input = tts.SynthesisInput(text=chunk)
+        voice = tts.VoiceSelectionParams(
+            language_code="en-US",
+            name=req.voice_name,
+        )
+        audio_config = tts.AudioConfig(
+            audio_encoding=tts.AudioEncoding.MP3,
+            speaking_rate=req.speaking_rate,
+            pitch=req.pitch,
+        )
+        response = await asyncio.to_thread(
+            client.synthesize_speech,
+            input=synthesis_input,
+            voice=voice,
+            audio_config=audio_config,
+        )
+        audio_parts.append(response.audio_content)
 
     combined = b"".join(audio_parts)
     safe_title = _safe_filename(title)
@@ -302,110 +279,8 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
     )
 
 
-def _split_long_sentences(text: str, max_sentence_chars: int = 400) -> str:
-    """Break long sentences at natural punctuation so TTS doesn't reject them.
-
-    Google Cloud TTS rejects individual sentences that are too long, even if
-    the overall request is within the byte limit.  This function inserts
-    sentence-ending periods at natural break-points (semicolons, colons,
-    em-dashes, commas before conjunctions) so every "sentence" stays short.
-    """
-    # Split into existing sentences first
-    raw_sentences = re.split(r'(?<=[.!?])\s+', text)
-    result: list[str] = []
-
-    for sentence in raw_sentences:
-        if len(sentence) <= max_sentence_chars:
-            result.append(sentence)
-            continue
-
-        # Try splitting at natural break-points, ordered by preference
-        fragments = _split_at_break_points(sentence, max_sentence_chars)
-        result.extend(fragments)
-
-    return " ".join(result)
-
-
-def _split_at_break_points(sentence: str, max_chars: int) -> list[str]:
-    """Split a single long sentence at natural punctuation boundaries."""
-    # Break-point patterns ordered by preference (strongest to weakest)
-    break_patterns = [
-        r';\s+',                          # semicolons
-        r':\s+',                          # colons
-        r'\s*[—–]\s*',                    # em/en-dashes
-        r',\s+(?=and |or |but |so |yet )',  # comma before conjunction
-        r',\s+',                          # any comma
-    ]
-
-    fragments: list[str] = []
-    remaining = sentence
-
-    for pattern in break_patterns:
-        if len(remaining) <= max_chars:
-            break
-        new_remaining_parts: list[str] = []
-        for part in [remaining] if not new_remaining_parts else new_remaining_parts:
-            if len(part) <= max_chars:
-                new_remaining_parts.append(part)
-                continue
-            pieces = re.split(pattern, part)
-            new_remaining_parts.extend(pieces)
-
-        # Reassemble pieces that fit, adding periods to create sentence breaks
-        merged: list[str] = []
-        current = ""
-        for piece in new_remaining_parts:
-            piece = piece.strip()
-            if not piece:
-                continue
-            if not current:
-                current = piece
-            elif len(current) + 1 + len(piece) <= max_chars:
-                current = current + " " + piece
-            else:
-                # End the current fragment with a period if it doesn't have one
-                if current and current[-1] not in ".!?":
-                    current = current.rstrip(",;:—–- ") + "."
-                merged.append(current)
-                current = piece
-        if current:
-            merged.append(current)
-
-        if merged and all(len(m) <= max_chars for m in merged):
-            fragments = merged
-            remaining = ""
-            break
-        elif merged:
-            # Some fragments still too long — continue with next pattern
-            fragments = [m for m in merged if len(m) <= max_chars]
-            remaining_parts = [m for m in merged if len(m) > max_chars]
-            remaining = " ".join(remaining_parts) if remaining_parts else ""
-
-    # Last resort: force-split on word boundaries
-    if remaining:
-        words = remaining.split()
-        current = ""
-        for word in words:
-            test = current + " " + word if current else word
-            if len(test) > max_chars:
-                if current:
-                    if current[-1] not in ".!?":
-                        current = current.rstrip(",;:—–- ") + "."
-                    fragments.append(current)
-                current = word
-            else:
-                current = test
-        if current:
-            fragments.append(current)
-
-    return fragments if fragments else [sentence]
-
-
 def _chunk_text(text: str, max_bytes: int) -> list[str]:
     """Split text into chunks that fit within Vertex TTS byte limit."""
-    # First, break up any long sentences that TTS would reject
-    text = _split_long_sentences(text)
-
     # Split on sentence-ending punctuation followed by whitespace
     sentences = re.split(r'(?<=[.!?])\s+', text.replace("\n", " "))
     chunks, current = [], ""
