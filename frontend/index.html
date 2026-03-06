@@ -627,6 +627,90 @@ function showPlayer(title, blobUrl) {
   audio.play();
 }
 
+async function streamAudio(response, title) {
+  const audio = document.getElementById('audio-player');
+  if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+
+  // Collect chunks for download link
+  const receivedChunks = [];
+  const reader = response.body.getReader();
+
+  // Try MediaSource for progressive playback
+  if (window.MediaSource && MediaSource.isTypeSupported('audio/mpeg')) {
+    const mediaSource = new MediaSource();
+    const msUrl = URL.createObjectURL(mediaSource);
+    currentObjectUrl = msUrl;
+    audio.src = msUrl;
+    document.getElementById('player-title').textContent = title;
+    document.getElementById('player-card').classList.add('visible', 'fade-in');
+
+    await new Promise((resolve, reject) => {
+      mediaSource.addEventListener('sourceopen', async () => {
+        const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+        let playStarted = false;
+        const pendingChunks = [];
+        let streamDone = false;
+
+        function appendNext() {
+          if (sourceBuffer.updating || pendingChunks.length === 0) {
+            if (streamDone && pendingChunks.length === 0 && !sourceBuffer.updating) {
+              try { mediaSource.endOfStream(); } catch (_) {}
+              finishDownloadLink();
+              resolve();
+            }
+            return;
+          }
+          sourceBuffer.appendBuffer(pendingChunks.shift());
+        }
+
+        sourceBuffer.addEventListener('updateend', () => {
+          if (!playStarted) {
+            playStarted = true;
+            audio.play();
+          }
+          appendNext();
+        });
+
+        function finishDownloadLink() {
+          const blob = new Blob(receivedChunks, { type: 'audio/mpeg' });
+          const dlUrl = URL.createObjectURL(blob);
+          const dl = document.getElementById('download-link');
+          dl.href = dlUrl;
+          dl.download = title.replace(/[^a-zA-Z0-9 _-]/g, '_').slice(0, 60) + '.mp3';
+        }
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              streamDone = true;
+              appendNext();
+              break;
+            }
+            receivedChunks.push(value.slice());
+            pendingChunks.push(value);
+            setStatus('Receiving audio\u2026');
+            appendNext();
+          }
+        } catch (err) {
+          reject(err);
+        }
+      }, { once: true });
+    });
+  } else {
+    // Fallback: read all chunks, then play as blob
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      receivedChunks.push(value);
+      setStatus('Receiving audio\u2026');
+    }
+    const blob = new Blob(receivedChunks, { type: 'audio/mpeg' });
+    const blobUrl = URL.createObjectURL(blob);
+    showPlayer(title, blobUrl);
+  }
+}
+
 // ── API calls ────────────────────────────────────────────────────────────────
 async function apiPost(path, body) {
   const res = await fetch(API_BASE + path, {
@@ -678,9 +762,7 @@ document.getElementById('convert-btn').addEventListener('click', async () => {
   try {
     const res = await apiPost('/tts', { url, voice_name: voice, speaking_rate: rate, pitch });
     const title = res.headers.get('X-Article-Title') || 'Article';
-    const blob  = await res.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    showPlayer(title, blobUrl);
+    await streamAudio(res, title);
     hidePreview();
     setStatus('');
   } catch (e) {

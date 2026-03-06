@@ -14,7 +14,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, HttpUrl, Field
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+from google.api_core.exceptions import InvalidArgument
 from google.cloud import texttospeech_v1beta1 as tts
+from lxml import etree
 import trafilatura
 import httpx
 from lxml import html as lxml_html
@@ -149,6 +151,36 @@ def _merge_article_elements(html: str) -> str:
     merged_inner = "".join(lxml_tostring(a, encoding="unicode") for a in best)
     return f"<html><body><article>{merged_inner}</article></body></html>"
 
+
+def _replace_code_blocks(html: str) -> str:
+    """Replace <pre> and standalone <code> blocks with a notice for TTS."""
+    try:
+        tree = lxml_html.fromstring(html)
+    except Exception:
+        return html
+
+    replacement = "A code block was excluded from this reading."
+
+    # Replace <pre> elements (which usually wrap <code> blocks)
+    for el in tree.xpath("//pre"):
+        placeholder = etree.Element("p")
+        placeholder.text = replacement
+        el.getparent().replace(el, placeholder)
+
+    # Replace remaining standalone <code> blocks that aren't inline.
+    # Inline <code> (inside a <p>, <span>, <li>, etc.) is kept as-is since
+    # it's typically just a word or short phrase.
+    for el in tree.xpath("//code"):
+        parent = el.getparent()
+        if parent is not None and parent.tag in ("p", "span", "li", "td", "th", "a", "em", "strong", "h1", "h2", "h3", "h4", "h5", "h6"):
+            continue
+        placeholder = etree.Element("p")
+        placeholder.text = replacement
+        parent.replace(el, placeholder)
+
+    return lxml_tostring(tree, encoding="unicode")
+
+
 # ---------------------------------------------------------------------------
 # Article extraction helper
 # ---------------------------------------------------------------------------
@@ -163,6 +195,7 @@ async def fetch_article_text(url: str) -> tuple[str, str]:
     # Some sites (e.g. Discord blog) split content across multiple <article>
     # elements. Trafilatura only extracts the first one, so merge them.
     html = _merge_article_elements(html)
+    html = _replace_code_blocks(html)
 
     result = trafilatura.extract(
         html,
@@ -201,7 +234,7 @@ async def extract(req: ExtractRequest, _=Depends(verify_google_token)):
 
 @app.post("/tts")
 async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
-    """Extract article and stream back MP3 audio."""
+    """Extract article and stream back MP3 audio as chunks are synthesized."""
     title, text = await fetch_article_text(str(req.url))
 
     # Vertex AI TTS has a 5000 byte limit per request — chunk if needed
@@ -210,39 +243,57 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
     logger.info(f"Converting '{title}' — {len(chunks)} chunk(s)")
 
     client = _get_tts_client()
-    audio_parts = []
 
-    for chunk in chunks:
-        synthesis_input = tts.SynthesisInput(text=chunk)
-        voice = tts.VoiceSelectionParams(
-            language_code="en-US",
-            name=req.voice_name,
-        )
-        audio_config = tts.AudioConfig(
-            audio_encoding=tts.AudioEncoding.MP3,
-            speaking_rate=req.speaking_rate,
-            pitch=req.pitch,
-        )
-        response = await asyncio.to_thread(
-            client.synthesize_speech,
-            input=synthesis_input,
-            voice=voice,
-            audio_config=audio_config,
-        )
-        audio_parts.append(response.audio_content)
+    voice = tts.VoiceSelectionParams(
+        language_code="en-US",
+        name=req.voice_name,
+    )
+    audio_config = tts.AudioConfig(
+        audio_encoding=tts.AudioEncoding.MP3,
+        speaking_rate=req.speaking_rate,
+        pitch=req.pitch,
+    )
 
-    combined = b"".join(audio_parts)
+    async def audio_stream():
+        for i, chunk in enumerate(chunks):
+            try:
+                response = await asyncio.to_thread(
+                    client.synthesize_speech,
+                    input=tts.SynthesisInput(text=chunk),
+                    voice=voice,
+                    audio_config=audio_config,
+                )
+                yield response.audio_content
+            except InvalidArgument as e:
+                error_msg = str(e)
+                if "sentences that are too long" in error_msg:
+                    logger.warning(f"Chunk {i} had sentences too long, re-splitting: {error_msg}")
+                    sub_chunks = _chunk_text(chunk, MAX_BYTES // 2)
+                    for sub_chunk in sub_chunks:
+                        try:
+                            response = await asyncio.to_thread(
+                                client.synthesize_speech,
+                                input=tts.SynthesisInput(text=sub_chunk),
+                                voice=voice,
+                                audio_config=audio_config,
+                            )
+                            yield response.audio_content
+                        except InvalidArgument:
+                            logger.error(f"Chunk still too long after re-split, skipping: {sub_chunk[:80]}...")
+                            continue
+                else:
+                    raise
+
     safe_title = _safe_filename(title)
     # Sanitize header value: strip control characters to prevent header injection
     header_title = re.sub(r'[\r\n\x00]', '', title)
 
     return StreamingResponse(
-        io.BytesIO(combined),
+        audio_stream(),
         media_type="audio/mpeg",
         headers={
             "Content-Disposition": f'attachment; filename="{safe_title}.mp3"',
             "X-Article-Title": header_title,
-            "Content-Length": str(len(combined)),
         },
     )
 
