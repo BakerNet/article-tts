@@ -54,7 +54,7 @@ gcloud run deploy article-tts \
   --region us-central1 \
   --platform managed \
   --allow-unauthenticated \
-  --set-env-vars "GOOGLE_CLIENT_ID=<YOUR_CLIENT_ID_HERE>,ALLOWED_EMAIL=<you@gmail.com>,FRONTEND_ORIGIN=<https://listen.yourdomain.com>" \
+  --set-env-vars "GOOGLE_CLIENT_ID=<YOUR_CLIENT_ID_HERE>,ALLOWED_EMAILS=<you@gmail.com,friend@gmail.com>,FRONTEND_ORIGIN=<https://listen.yourdomain.com>" \
   --memory 512Mi \
   --timeout 120
 ```
@@ -114,7 +114,7 @@ cd backend
 pip install -r requirements.txt
 
 export GOOGLE_CLIENT_ID="your-client-id"
-export ALLOWED_EMAIL="you@gmail.com"
+export ALLOWED_EMAILS="you@gmail.com"
 export FRONTEND_ORIGIN="http://localhost:3000"
 
 # Uses your local gcloud credentials for Vertex AI

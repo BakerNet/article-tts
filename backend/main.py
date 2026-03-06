@@ -17,6 +17,8 @@ from google.auth.transport import requests as google_requests
 from google.cloud import texttospeech_v1beta1 as tts
 import trafilatura
 import httpx
+from lxml import html as lxml_html
+from lxml.html import tostring as lxml_tostring
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,7 +29,7 @@ app = FastAPI(title="Article TTS API")
 # Config — set these as Cloud Run environment variables
 # ---------------------------------------------------------------------------
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]       # OAuth Web Client ID
-ALLOWED_EMAIL    = os.environ["ALLOWED_EMAIL"]           # your Google account email
+ALLOWED_EMAILS   = {e.strip().lower() for e in os.environ["ALLOWED_EMAILS"].split(",")}  # comma-separated list
 FRONTEND_ORIGIN  = os.environ["FRONTEND_ORIGIN"]            # Your PWA origin e.g. https://tts.yourdomain.com
 
 # ---------------------------------------------------------------------------
@@ -61,7 +63,7 @@ def verify_google_token(credentials: HTTPAuthorizationCredentials = Depends(secu
         raise HTTPException(status_code=401, detail="Invalid or expired Google token")
 
     email = id_info.get("email")
-    if email != ALLOWED_EMAIL:
+    if email.lower() not in ALLOWED_EMAILS:
         logger.warning(f"Unauthorized email attempt: {email}")
         raise HTTPException(status_code=403, detail="You are not authorized to use this service")
 
@@ -107,6 +109,47 @@ def _get_tts_client() -> tts.TextToSpeechClient:
     return tts.TextToSpeechClient()
 
 # ---------------------------------------------------------------------------
+# HTML pre-processing
+# ---------------------------------------------------------------------------
+def _merge_article_elements(html: str) -> str:
+    """Merge sibling <article> elements into one so trafilatura sees all content.
+
+    Some sites (e.g. Discord blog) split a single post across multiple <article>
+    tags under a common parent.  We only merge articles that share the same
+    grandparent to avoid pulling in unrelated "related posts" widgets.
+    """
+    try:
+        tree = lxml_html.fromstring(html)
+    except Exception:
+        return html
+    articles = tree.xpath("//article")
+    if len(articles) <= 1:
+        return html
+
+    # Group articles by grandparent element
+    from collections import defaultdict
+    groups: dict[int, list] = defaultdict(list)
+    for a in articles:
+        parent = a.getparent()
+        grandparent = parent.getparent() if parent is not None else parent
+        groups[id(grandparent)].append(a)
+
+    # Find the largest group with more than one article
+    best = max(groups.values(), key=lambda g: sum(len(a.text_content() or "") for a in g))
+    if len(best) <= 1:
+        return html
+
+    # If one article already dominates (>70% of total text), trafilatura will
+    # extract it fine — merging would only add junk like "related posts".
+    sizes = [len(a.text_content() or "") for a in best]
+    total = sum(sizes)
+    if total > 0 and max(sizes) / total > 0.7:
+        return html
+
+    merged_inner = "".join(lxml_tostring(a, encoding="unicode") for a in best)
+    return f"<html><body><article>{merged_inner}</article></body></html>"
+
+# ---------------------------------------------------------------------------
 # Article extraction helper
 # ---------------------------------------------------------------------------
 async def fetch_article_text(url: str) -> tuple[str, str]:
@@ -117,11 +160,14 @@ async def fetch_article_text(url: str) -> tuple[str, str]:
         resp.raise_for_status()
         html = resp.text
 
+    # Some sites (e.g. Discord blog) split content across multiple <article>
+    # elements. Trafilatura only extracts the first one, so merge them.
+    html = _merge_article_elements(html)
+
     result = trafilatura.extract(
         html,
         include_comments=False,
         include_tables=False,
-        favor_precision=True,
         output_format="txt",
     )
     metadata = trafilatura.extract_metadata(html)
