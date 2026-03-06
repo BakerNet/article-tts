@@ -14,6 +14,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, HttpUrl, Field
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+from google.api_core.exceptions import InvalidArgument
 from google.cloud import texttospeech_v1beta1 as tts
 from lxml import etree
 import trafilatura
@@ -244,24 +245,45 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
     client = _get_tts_client()
     audio_parts = []
 
-    for chunk in chunks:
-        synthesis_input = tts.SynthesisInput(text=chunk)
-        voice = tts.VoiceSelectionParams(
-            language_code="en-US",
-            name=req.voice_name,
-        )
-        audio_config = tts.AudioConfig(
-            audio_encoding=tts.AudioEncoding.MP3,
-            speaking_rate=req.speaking_rate,
-            pitch=req.pitch,
-        )
-        response = await asyncio.to_thread(
-            client.synthesize_speech,
-            input=synthesis_input,
-            voice=voice,
-            audio_config=audio_config,
-        )
-        audio_parts.append(response.audio_content)
+    voice = tts.VoiceSelectionParams(
+        language_code="en-US",
+        name=req.voice_name,
+    )
+    audio_config = tts.AudioConfig(
+        audio_encoding=tts.AudioEncoding.MP3,
+        speaking_rate=req.speaking_rate,
+        pitch=req.pitch,
+    )
+
+    for i, chunk in enumerate(chunks):
+        try:
+            response = await asyncio.to_thread(
+                client.synthesize_speech,
+                input=tts.SynthesisInput(text=chunk),
+                voice=voice,
+                audio_config=audio_config,
+            )
+            audio_parts.append(response.audio_content)
+        except InvalidArgument as e:
+            error_msg = str(e)
+            if "sentences that are too long" in error_msg:
+                # Re-chunk more aggressively and retry
+                logger.warning(f"Chunk {i} had sentences too long, re-splitting: {error_msg}")
+                sub_chunks = _chunk_text(chunk, MAX_BYTES // 2)
+                for sub_chunk in sub_chunks:
+                    try:
+                        response = await asyncio.to_thread(
+                            client.synthesize_speech,
+                            input=tts.SynthesisInput(text=sub_chunk),
+                            voice=voice,
+                            audio_config=audio_config,
+                        )
+                        audio_parts.append(response.audio_content)
+                    except InvalidArgument:
+                        logger.error(f"Chunk still too long after re-split, skipping: {sub_chunk[:80]}...")
+                        continue
+            else:
+                raise
 
     combined = b"".join(audio_parts)
     safe_title = _safe_filename(title)
