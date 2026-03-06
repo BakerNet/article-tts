@@ -10,6 +10,7 @@ venv/
 # Environment
 .env
 env.yml
+.venv
 
 # Misc
 .wrangler
