@@ -296,8 +296,9 @@ async def text_to_speech(req: TTSRequest, _=Depends(verify_google_token)):
             raise
 
     safe_title = _safe_filename(title)
-    # Sanitize header value: strip control characters to prevent header injection
-    header_title = re.sub(r'[\r\n\x00]', '', title)
+    # Sanitize header value: strip control characters to prevent header injection,
+    # and encode to latin-1 (required by HTTP) replacing unencodable characters
+    header_title = re.sub(r'[\r\n\x00]', '', title).encode('latin-1', errors='replace').decode('latin-1')
 
     return StreamingResponse(
         audio_stream(),
